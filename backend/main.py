@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import os
 import json
 from dotenv import load_dotenv
-from groq import Groq
+import google.generativeai as genai
 
 load_dotenv()
 
@@ -18,8 +18,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+print("=== KEY CHECK ===")
+print("Key length:", len(GEMINI_API_KEY) if GEMINI_API_KEY else 0)
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 class SimulateRequest(BaseModel):
     event: str
@@ -71,25 +75,19 @@ def parse_ai_response(content: str) -> dict:
 
 @app.post("/simulate", response_model=SimulateResponse)
 async def simulate_event(request: SimulateRequest):
-    if not client:
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY not set")
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not set")
 
     event = request.event.strip()
     if not event:
         raise HTTPException(status_code=400, detail="Event cannot be empty")
 
     try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Event: {event}"}
-            ],
-            temperature=0.3,
-            max_tokens=800,
-        )
-
-        content = completion.choices[0].message.content.strip()
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        prompt = SYSTEM_PROMPT + f"\n\nEvent: {event}"
+        
+        response = model.generate_content(prompt)
+        content = response.text.strip()
         data = parse_ai_response(content)
 
         return {
@@ -98,16 +96,18 @@ async def simulate_event(request: SimulateRequest):
             "reasons": data["reasons"],
             "confidence": data.get("confidence", 0.75),
             "summary": data.get("summary", "Simulated impact"),
-            "provider_used": "groq"
+            "provider_used": "gemini"
         }
 
     except Exception as e:
+        print("=== ERROR ===")
+        print(str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 def health():
     return {
         "status": "Impact Candle API running",
-        "provider": "groq",
-        "ready": bool(GROQ_API_KEY)
+        "provider": "gemini",
+        "ready": bool(GEMINI_API_KEY)
     }
